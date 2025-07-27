@@ -12,34 +12,7 @@ function App() {
   const [announcements, setAnnouncements] = useState([]);
   const [leaderboard, setLeaderboard] = useState([]);
 
-  // Auth state listener
-  useEffect(() => {
-    const getSession = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      setUser(session?.user ?? null);
-      setLoading(false);
-    };
-
-    getSession();
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-      setLoading(false);
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
-
-  // Load user data when user changes
-  useEffect(() => {
-    if (user) {
-      loadUserData();
-      loadDailyReadings();
-      loadAnnouncements();
-      loadLeaderboard();
-    }
-  }, [user]);
-
+  // Define all async functions first
   const loadUserData = async () => {
     const { data: profile } = await supabase
       .from('user_profiles')
@@ -58,11 +31,13 @@ function App() {
   };
 
   const loadDailyReadings = async () => {
+    const today = new Date().toISOString().split('T')[0];
+    
     const { data } = await supabase
       .from('daily_readings')
       .select('*')
-      .order('date', { ascending: false })
-      .limit(10);
+      .lte('date', today)
+      .order('date', { ascending: true }); // Changed to ascending to show chronological order
     
     setDailyReadings(data || []);
   };
@@ -78,13 +53,54 @@ function App() {
     setAnnouncements(data || []);
   };
 
+  // Updated leaderboard calculation to include real-time progress
   const loadLeaderboard = async () => {
-    const { data } = await supabase
+    const { data: profiles } = await supabase
       .from('user_profiles')
-      .select('*')
-      .order('chapters_read', { ascending: false });
+      .select('id, name, chapters_read, chapters_missed');
     
-    setLeaderboard(data || []);
+    if (!profiles) {
+      setLeaderboard([]);
+      return;
+    }
+
+    // Get all reading logs to calculate real-time progress
+    const { data: allLogs } = await supabase
+      .from('reading_logs')
+      .select('user_id, reading_id, completed');
+
+    const today = new Date().toISOString().split('T')[0];
+    const { data: readingsDue } = await supabase
+      .from('daily_readings')
+      .select('id, date')
+      .lte('date', today);
+
+    const readingsDueIds = readingsDue?.map(r => r.id) || [];
+
+    // Calculate real-time stats for each user
+    const updatedProfiles = profiles.map(profile => {
+      const userLogs = allLogs?.filter(log => log.user_id === profile.id) || [];
+      const completedReadings = userLogs.filter(log => log.completed);
+      const chaptersRead = completedReadings.length;
+      
+      // Calculate missed readings (readings due but not completed)
+      const completedReadingIds = completedReadings.map(log => log.reading_id);
+      const missedReadings = readingsDueIds.filter(readingId => 
+        !completedReadingIds.includes(readingId)
+      );
+      const chaptersMissed = missedReadings.length;
+
+      return {
+        ...profile,
+        chapters_read: chaptersRead,
+        chapters_missed: chaptersMissed
+      };
+    });
+
+    // Sort by chapters read
+    updatedProfiles.sort((a, b) => b.chapters_read - a.chapters_read);
+    
+    setLeaderboard(updatedProfiles);
   };
 
   const signIn = async (email, password) => {
@@ -121,7 +137,10 @@ function App() {
         })
         .eq('id', existingLog.id);
       
-      if (!error) loadUserData();
+      if (!error) {
+        loadUserData();
+        loadLeaderboard();
+      }
     } else {
       const { error } = await supabase
         .from('reading_logs')
@@ -132,7 +151,10 @@ function App() {
           completed_at: new Date().toISOString()
         });
       
-      if (!error) loadUserData();
+      if (!error) {
+        loadUserData();
+        loadLeaderboard();
+      }
     }
   };
 
@@ -141,17 +163,60 @@ function App() {
     return log?.completed || false;
   };
 
+  // Updated stats calculation to use real-time data
   const getUserStats = () => {
-    if (!userProfile) return { chaptersRead: 0, chaptersRemaining: 1189, chaptersMissed: 0, completionPercentage: 0 };
+    if (!dailyReadings.length) return { chaptersRead: 0, chaptersRemaining: 1189, chaptersMissed: 0, completionPercentage: 0 };
+    
+    const today = new Date();
+    today.setHours(23, 59, 59, 999);
+    
+    // Get readings due up to today
+    const readingsDue = dailyReadings.filter(reading => {
+      const readingDate = new Date(reading.date);
+      return readingDate <= today;
+    });
+    
+    // Calculate completed readings
+    const completedReadings = readingsDue.filter(reading => isReadingComplete(reading.id));
+    const chaptersRead = completedReadings.length;
+    
+    // Calculate missed readings (due but not completed)
+    const chaptersMissed = readingsDue.length - chaptersRead;
     
     const totalChapters = 1189;
-    const chaptersRead = userProfile.chapters_read;
     const chaptersRemaining = totalChapters - chaptersRead;
-    const chaptersMissed = userProfile.chapters_missed;
     const completionPercentage = ((chaptersRead / totalChapters) * 100).toFixed(1);
     
     return { chaptersRead, chaptersRemaining, chaptersMissed, completionPercentage };
   };
+
+  // Auth state listener
+  useEffect(() => {
+    const getSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      setUser(session?.user ?? null);
+      setLoading(false);
+    };
+
+    getSession();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      setLoading(false);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // Load user data when user changes
+  useEffect(() => {
+    if (user) {
+      loadUserData();
+      loadDailyReadings();
+      loadAnnouncements();
+      loadLeaderboard();
+    }
+  }, [user]);
 
   // Auth component
   const AuthComponent = () => {
@@ -283,10 +348,27 @@ function App() {
     </nav>
   );
 
-  // Dashboard Page
+  // Dashboard Page with improved unchecked readings logic
   const Dashboard = () => {
     const stats = getUserStats();
-    const todayReading = dailyReadings[0];
+    
+    // Get unchecked readings due up to today (improved logic)
+    const getUncheckedReadings = () => {
+      const today = new Date();
+      today.setHours(23, 59, 59, 999);
+      
+      return dailyReadings.filter(reading => {
+        const readingDate = new Date(reading.date);
+        return readingDate <= today && !isReadingComplete(reading.id);
+      }).sort((a, b) => new Date(a.date) - new Date(b.date)); // Sort chronologically
+    };
+
+    const uncheckedReadings = getUncheckedReadings();
+    const todayReading = dailyReadings.find(reading => {
+      const readingDate = new Date(reading.date).toDateString();
+      const today = new Date().toDateString();
+      return readingDate === today;
+    });
     
     return (
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -295,7 +377,7 @@ function App() {
           <p className="text-gray-600 mt-2">Track your daily Bible reading progress</p>
         </div>
 
-        {/* Stats Cards */}
+        {/* Stats Cards - Updated to use real-time calculations */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
           <div className="bg-white p-6 rounded-lg shadow">
             <div className="flex items-center">
@@ -319,7 +401,7 @@ function App() {
             <div className="flex items-center">
               <Circle className="h-8 w-8 text-red-500" />
               <div className="ml-4">
-                <p className="text-sm font-medium text-gray-600">Missed</p>
+                <p className="text-sm font-medium text-gray-600">Behind Schedule</p>
                 <p className="text-2xl font-bold text-gray-900">{stats.chaptersMissed}</p>
               </div>
             </div>
@@ -346,7 +428,7 @@ function App() {
                 <div>
                   <h3 className="text-lg font-medium text-gray-900">{todayReading.title}</h3>
                   <p className="text-gray-600">{todayReading.passage}</p>
-                  <p className="text-sm text-gray-500">{todayReading.date}</p>
+                  <p className="text-sm text-gray-500">{new Date(todayReading.date).toLocaleDateString()}</p>
                 </div>
                 <button
                   onClick={() => toggleReadingComplete(todayReading.id)}
@@ -368,6 +450,91 @@ function App() {
                     </>
                   )}
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Unchecked Readings Due - Enhanced display */}
+        {uncheckedReadings.length > 0 && (
+          <div className="bg-white rounded-lg shadow mb-8">
+            <div className="px-6 py-4 border-b">
+              <h2 className="text-xl font-semibold text-gray-900">
+                Readings to Catch Up ({uncheckedReadings.length} remaining)
+              </h2>
+              <p className="text-sm text-gray-600 mt-1">
+                All readings due up to today that haven't been completed yet
+              </p>
+            </div>
+            <div className="p-6">
+              <div className="space-y-4 max-h-96 overflow-y-auto">
+                {uncheckedReadings.map(reading => {
+                  const readingDate = new Date(reading.date);
+                  const today = new Date();
+                  today.setHours(0, 0, 0, 0);
+                  const isOverdue = readingDate < today;
+                  const isToday = readingDate.toDateString() === new Date().toDateString();
+                  
+                  return (
+                    <div key={reading.id} className={`flex items-center justify-between p-4 border rounded-lg ${
+                      isToday ? 'border-blue-200 bg-blue-50' :
+                      isOverdue ? 'border-red-200 bg-red-50' : 'border-gray-200'
+                    }`}>
+                      <div>
+                        <h3 className={`font-medium ${
+                          isToday ? 'text-blue-900' :
+                          isOverdue ? 'text-red-900' : 'text-gray-900'
+                        }`}>
+                          {reading.title}
+                        </h3>
+                        <p className={`${
+                          isToday ? 'text-blue-700' :
+                          isOverdue ? 'text-red-700' : 'text-gray-600'
+                        }`}>
+                          {reading.passage}
+                        </p>
+                        <div className="flex items-center mt-1">
+                          <p className={`text-sm ${
+                            isToday ? 'text-blue-600' :
+                            isOverdue ? 'text-red-600' : 'text-gray-500'
+                          }`}>
+                            {new Date(reading.date).toLocaleDateString()}
+                          </p>
+                          {isToday && (
+                            <span className="ml-2 px-2 py-1 text-xs font-medium bg-blue-100 text-blue-800 rounded-full">
+                              Today
+                            </span>
+                          )}
+                          {isOverdue && !isToday && (
+                            <span className="ml-2 px-2 py-1 text-xs font-medium bg-red-100 text-red-800 rounded-full">
+                              Overdue
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => toggleReadingComplete(reading.id)}
+                        className="flex items-center px-4 py-2 rounded-md bg-gray-100 text-gray-700 hover:bg-gray-200"
+                      >
+                        <Circle className="h-5 w-5 mr-2" />
+                        Mark Complete
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Show message if all caught up */}
+        {uncheckedReadings.length === 0 && (
+          <div className="bg-green-50 border border-green-200 rounded-lg p-6 mb-8">
+            <div className="flex items-center">
+              <CheckCircle className="h-8 w-8 text-green-500" />
+              <div className="ml-4">
+                <h3 className="text-lg font-medium text-green-900">All Caught Up!</h3>
+                <p className="text-green-700">You've completed all readings due up to today. Great job!</p>
               </div>
             </div>
           </div>
@@ -400,55 +567,114 @@ function App() {
   };
 
   // Calendar Page
-  const CalendarPage = () => (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900">Reading Calendar</h1>
-        <p className="text-gray-600 mt-2">View and track your daily readings</p>
-      </div>
+  const CalendarPage = () => {
+    const today = new Date();
+    
+    const readingsUpToToday = dailyReadings.filter(reading => {
+      const readingDate = new Date(reading.date);
+      return readingDate <= today;
+    }).sort((a, b) => new Date(b.date) - new Date(a.date)); // Most recent first
 
-      <div className="bg-white rounded-lg shadow">
-        <div className="px-6 py-4 border-b">
-          <h2 className="text-xl font-semibold text-gray-900">Recent Readings</h2>
+    return (
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="mb-8">
+          <h1 className="text-3xl font-bold text-gray-900">Reading Calendar</h1>
+          <p className="text-gray-600 mt-2">View and track your daily readings</p>
         </div>
-        <div className="p-6">
-          <div className="space-y-4">
-            {dailyReadings.map(reading => (
-              <div key={reading.id} className="flex items-center justify-between p-4 border rounded-lg">
-                <div>
-                  <h3 className="font-medium text-gray-900">{reading.title}</h3>
-                  <p className="text-gray-600">{reading.passage}</p>
-                  <p className="text-sm text-gray-500">{reading.date}</p>
-                </div>
-                <button
-                  onClick={() => toggleReadingComplete(reading.id)}
-                  className={`flex items-center px-4 py-2 rounded-md ${
-                    isReadingComplete(reading.id)
-                      ? 'bg-green-100 text-green-800 hover:bg-green-200'
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
-                >
-                  {isReadingComplete(reading.id) ? (
-                    <>
-                      <CheckCircle className="h-5 w-5 mr-2" />
-                      Completed
-                    </>
-                  ) : (
-                    <>
-                      <Circle className="h-5 w-5 mr-2" />
-                      Mark Complete
-                    </>
-                  )}
-                </button>
-              </div>
-            ))}
+
+        <div className="bg-white rounded-lg shadow">
+          <div className="px-6 py-4 border-b">
+            <h2 className="text-xl font-semibold text-gray-900">
+              Readings Available ({readingsUpToToday.length} total)
+            </h2>
+          </div>
+          <div className="p-6">
+            <div className="space-y-4">
+              {readingsUpToToday.map(reading => {
+                const isCompleted = isReadingComplete(reading.id);
+                const readingDate = new Date(reading.date);
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                const isOverdue = readingDate < today && !isCompleted;
+                const isToday = readingDate.toDateString() === new Date().toDateString();
+                
+                return (
+                  <div key={reading.id} className={`flex items-center justify-between p-4 border rounded-lg ${
+                    isCompleted ? 'border-green-200 bg-green-50' : 
+                    isToday ? 'border-blue-200 bg-blue-50' :
+                    isOverdue ? 'border-red-200 bg-red-50' : 'border-gray-200'
+                  }`}>
+                    <div>
+                      <h3 className={`font-medium ${
+                        isCompleted ? 'text-green-900' : 
+                        isToday ? 'text-blue-900' :
+                        isOverdue ? 'text-red-900' : 'text-gray-900'
+                      }`}>
+                        {reading.title}
+                      </h3>
+                      <p className={`${
+                        isCompleted ? 'text-green-700' : 
+                        isToday ? 'text-blue-700' :
+                        isOverdue ? 'text-red-700' : 'text-gray-600'
+                      }`}>
+                        {reading.passage}
+                      </p>
+                      <div className="flex items-center mt-1">
+                        <p className={`text-sm ${
+                          isCompleted ? 'text-green-600' : 
+                          isToday ? 'text-blue-600' :
+                          isOverdue ? 'text-red-600' : 'text-gray-500'
+                        }`}>
+                          {new Date(reading.date).toLocaleDateString()}
+                        </p>
+                        {isToday && (
+                          <span className="ml-2 px-2 py-1 text-xs font-medium bg-blue-100 text-blue-800 rounded-full">
+                            Today
+                          </span>
+                        )}
+                        {isOverdue && (
+                          <span className="ml-2 px-2 py-1 text-xs font-medium bg-red-100 text-red-800 rounded-full">
+                            Overdue
+                          </span>
+                        )}
+                        {isCompleted && (
+                          <span className="ml-2 px-2 py-1 text-xs font-medium bg-green-100 text-green-800 rounded-full">
+                            Completed
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => toggleReadingComplete(reading.id)}
+                      className={`flex items-center px-4 py-2 rounded-md ${
+                        isCompleted
+                          ? 'bg-green-100 text-green-800 hover:bg-green-200'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      }`}
+                    >
+                      {isCompleted ? (
+                        <>
+                          <CheckCircle className="h-5 w-5 mr-2" />
+                          Completed
+                        </>
+                      ) : (
+                        <>
+                          <Circle className="h-5 w-5 mr-2" />
+                          Mark Complete
+                        </>
+                      )}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       </div>
-    </div>
-  );
+    );
+  };
 
-  // Community Page
+  // Community Page - Updated to show real-time progress
   const CommunityPage = () => (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       <div className="mb-8">
@@ -460,6 +686,7 @@ function App() {
       <div className="bg-white rounded-lg shadow mb-8">
         <div className="px-6 py-4 border-b">
           <h2 className="text-xl font-semibold text-gray-900">Leaderboard</h2>
+          <p className="text-sm text-gray-600 mt-1">Real-time progress based on completed readings</p>
         </div>
         <div className="p-6">
           <div className="space-y-4">
@@ -477,7 +704,7 @@ function App() {
                   </div>
                 </div>
                 <div className="text-right">
-                  <p className="text-sm text-gray-600">Missed: {profile.chapters_missed}</p>
+                  <p className="text-sm text-gray-600">Behind: {profile.chapters_missed}</p>
                   <p className="text-sm text-gray-600">
                     Progress: {((profile.chapters_read / 1189) * 100).toFixed(1)}%
                   </p>
