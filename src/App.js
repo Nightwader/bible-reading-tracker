@@ -451,22 +451,38 @@ function App() {
                   )}
                 </button>
               </div>
+              
+              {/* Completion Message */}
+              {isReadingComplete(todayReading.id) && (
+                <div className="mt-6 text-center py-4 bg-green-50 border border-green-200 rounded-lg">
+                  <div className="flex items-center justify-center mb-2">
+                    <CheckCircle className="h-6 w-6 text-green-600 mr-2" />
+                    <span className="text-green-800 font-medium">Reading Complete!</span>
+                  </div>
+                  <blockquote className="text-green-700 italic mb-2">
+                    "It is finished."
+                  </blockquote>
+                  <p className="text-sm text-green-600 mb-1">- John 19:30</p>
+                  <p className="text-green-800 font-medium">...for today. Come back tomorrow!</p>
+                </div>
+              )}
             </div>
           </div>
         )}
 
-        {/* Unchecked Readings Due - Enhanced display */}
-        {uncheckedReadings.length > 0 && (
-          <div className="bg-white rounded-lg shadow mb-8">
-            <div className="px-6 py-4 border-b">
-              <h2 className="text-xl font-semibold text-gray-900">
-                Readings to Catch Up ({uncheckedReadings.length} remaining)
-              </h2>
-              <p className="text-sm text-gray-600 mt-1">
-                All readings due up to today that haven't been completed yet
-              </p>
-            </div>
-            <div className="p-6">
+        {/* Pending Readings Section */}
+        <div className="bg-white rounded-lg shadow mb-8">
+          <div className="px-6 py-4 border-b">
+            <h2 className="text-xl font-semibold text-gray-900">Pending</h2>
+            <p className="text-sm text-gray-600 mt-1">
+              {uncheckedReadings.length > 0 
+                ? `Missed readings to catch up on (${uncheckedReadings.length} remaining)`
+                : "All caught up with your readings"
+              }
+            </p>
+          </div>
+          <div className="p-6">
+            {uncheckedReadings.length > 0 ? (
               <div className="space-y-4 max-h-96 overflow-y-auto">
                 {uncheckedReadings.map(reading => {
                   const readingDate = new Date(reading.date);
@@ -523,22 +539,22 @@ function App() {
                   );
                 })}
               </div>
-            </div>
-          </div>
-        )}
-
-        {/* Show message if all caught up */}
-        {uncheckedReadings.length === 0 && (
-          <div className="bg-green-50 border border-green-200 rounded-lg p-6 mb-8">
-            <div className="flex items-center">
-              <CheckCircle className="h-8 w-8 text-green-500" />
-              <div className="ml-4">
-                <h3 className="text-lg font-medium text-green-900">All Caught Up!</h3>
-                <p className="text-green-700">You've completed all readings due up to today. Great job!</p>
+            ) : (
+              <div className="text-center py-8">
+                <div className="max-w-2xl mx-auto">
+                  <BookOpen className="h-16 w-16 text-indigo-500 mx-auto mb-4" />
+                  <blockquote className="text-lg text-gray-700 italic mb-4">
+                    "I have not departed from the commandment of his lips; I have treasured the words of his mouth more than my portion of food."
+                  </blockquote>
+                  <p className="text-sm text-gray-600 mb-4">- Job 23:12</p>
+                  <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                    <p className="text-green-800 font-medium">This person must be you! No pending, keep up the good work!</p>
+                  </div>
+                </div>
               </div>
-            </div>
+            )}
           </div>
-        )}
+        </div>
 
         {/* Recent Announcements */}
         <div className="bg-white rounded-lg shadow">
